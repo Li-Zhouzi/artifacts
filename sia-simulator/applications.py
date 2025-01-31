@@ -279,7 +279,7 @@ class Application(object):
         else:
             # Interpolate between num_nodes, num_replicas, and local_bsz.
             df = self.placements.groupby(xs)[xs + ys].mean()
-            df = df.append(self.scalability, ignore_index=True)
+            df = df._append(self.scalability, ignore_index=True)
             num_nodes, num_replicas = len(placement), sum(placement)
             num_nodes = min(num_nodes, 16)
             interpolator = LinearNDInterpolator(df[xs].values, df[ys].values)

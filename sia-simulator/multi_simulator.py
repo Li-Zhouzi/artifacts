@@ -11,11 +11,13 @@ from rich.table import Table
 from cluster import Cluster
 from gavel import GavelPolicy
 from sia import SiaPolicy
+from dummy_policy import DummyPolicy
 from sia_fix import SiaFixPolicy
 import simulator_config as sim_config
 
 
 def multi_simulate(args):
+    print("----------Read Workload----------")
     workload = pandas.read_csv(args.workload)
     if args.cluster_scale is not None:
         for k in sim_config.cluster_nnodes.keys():
@@ -24,7 +26,7 @@ def multi_simulate(args):
 
     # filter out GPU types not in simulated cluster
     sim_ngpus_per_node = {k: sim_config.cluster_ngpus_per_node[k] for k in sim_config.cluster_nnodes.keys()}
-
+    print("----------Assign Policy----------")
     if args.policy == "gavel":
         policy = GavelPolicy(args.interval, policy=sim_config.gavel_default_policy)
     elif args.policy == "sia_fix":
@@ -51,6 +53,8 @@ def multi_simulate(args):
         cluster.disable_bsz_tuning()
     if args.policy == "gavel":
         cluster.disable_bsz_tuning()
+    elif args.policy == "dummy":
+        policy = DummyPolicy(args.b)
     if args.policy == "sia":
         # seed profiles for all rigid jobs
         rigid_jobs = [job for job in cluster.jobs if job.category == "rigid"]
@@ -130,7 +134,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("workload", type=str, help="path to workload csv")
     parser.add_argument("--policy", type=str, default="sia",
-                        choices=["sia", "gavel", "sia_fix"])
+                        choices=["sia", "gavel", "sia_fix", "dummy"])
     parser.add_argument("--policy_p_val", type=float,
                         default=0.5, help="value of p for policy=sia")
     parser.add_argument("--mip_lambda_n", type=float, default=None,
@@ -151,6 +155,8 @@ if __name__ == "__main__":
                         default=0, help="number of replicas to seed profiles for")
     parser.add_argument("--interval", type=int, default=60,
                         help="scheduling interval in seconds")
+    parser.add_argument("--b", type=float, default=20, 
+                        help="time average budget for fixed width")
     parser.add_argument("--output", type=str, help="path to output logs")
     parser.add_argument("--debug", action='store_true', default=False,
                         help="DEBUG MODE: simulate a scheduling round, pause and wait for user input to simulate next round")

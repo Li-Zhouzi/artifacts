@@ -8,7 +8,8 @@
 # "rtx" : 8x RTX 2080Ti on-prem
 cluster_ngpus_per_node = {"aws": 4, "azure" : 8, "dgx": 8, "dgx-ext": 8, "quad" : 4, "rtx": 8}
 # number of nodes per GPU type (vary to change simulated cluster makeup)
-cluster_nnodes = {"aws": 6, "dgx-ext": 2, "rtx": 3}       # default for experiments
+# cluster_nnodes = {"aws": 6, "dgx-ext": 2, "rtx": 3}       # default for experiments
+cluster_nnodes = {"aws": 16}
 # cluster_nnodes = {"aws": 16}                              # homogeneous cluster
 # cluster_nnodes = {"rtx": 3, "dgx-ext": 2, "quad": 1}      # phoebe config
 # max number of profiled physical nodes for each GPU type
@@ -53,7 +54,7 @@ sia_default_p_val = -0.5
 sia_goodput_clip_val = 3000.0
 # solver params
 # solver verbosity control
-sia_solver_verbose = True
+sia_solver_verbose = False
 # choose solver: GLPK/CBC
 sia_solver = "glpk"
 # solver threading control (only for CBC solver)

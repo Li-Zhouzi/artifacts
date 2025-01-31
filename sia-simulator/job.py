@@ -12,6 +12,16 @@ from utils import JobInfo, NodeInfo
 
 MAX_SLOWDOWN = 15
 
+"""
+Options: None, "approximation", "raw_simulation"
+
+- None disables profiling (no speedup print lines)
+- approximation enables profiling of the fitting function (from pollux paper)
+- raw_simulation enables profiling of the raw simulatƒion times
+
+"""
+PROFILE="approximation"
+
 class Job(object):
     def __init__(self, name, applications, submission_time,
                  target_num_replicas=None, target_batch_size=None,
@@ -483,6 +493,22 @@ class Job(object):
             # goodput = self.multiplier * goodput
             # slowdown for job
             goodput = goodput * self.calibration_factor
+
+
+            if PROFILE=="approximation":
+                speedup = self.get_speedup_fn("aws")
+                speedup._goodput_fn.VERBOSE=True
+                speedup._goodput_fn.name=self.name
+                speedup._goodput_fn.epoch=self.epoch
+                replicas = 1
+                while replicas <=64:
+                    nodes = int(math.ceil(replicas/4.0))
+                    print("speedup", self.name, self.epoch, replicas, speedup(nodes, replicas), speedup._base_goodput)
+                    replicas += 1
+                speedup._goodput_fn.VERBOSE=True
+            
+            elif PROFILE=="raw_simulation":
+                print("speedup", self.name, self.epoch, num_replicas, goodput)
 
             # Update current epoch and progress.
             next_progress = application.get_progress(self.epoch + 1)
