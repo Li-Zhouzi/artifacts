@@ -133,7 +133,7 @@ class DummyPolicy(object):
                 # print(node_id)
                 # print("node_gpus: ", node_gpus)
                 if node_gpus != 0:
-                    can_take_gpus = min(num_gpus, node_gpus)
+                    can_take_gpus = int(min(num_gpus, node_gpus))
                     num_gpus -= can_take_gpus
                     node_remaining_gpus[node_id] -= can_take_gpus
                     job_placement.extend([node_id] * can_take_gpus)

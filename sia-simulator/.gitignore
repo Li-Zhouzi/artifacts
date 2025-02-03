@@ -1,2 +1,6 @@
 profile_all/*
 results/*
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

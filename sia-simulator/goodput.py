@@ -65,7 +65,7 @@ class GoodputFunction(object):
         batch_size = num_replicas * atomic_bsz * (accum_steps + 1)
         assert np.all(self._init_batch_size <= batch_size)
         return self.throughput(num_nodes, num_replicas, atomic_bsz,
-                               accum_steps) * self.efficiency(batch_size)
+                               accum_steps) * self.efficiency(batch_size) / self._init_batch_size
 
     def throughput(self, num_nodes, num_replicas, atomic_bsz, accum_steps):
         accum_time = _predict_accum_time(self._perf_params, atomic_bsz)

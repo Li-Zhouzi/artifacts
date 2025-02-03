@@ -30,13 +30,13 @@ def multi_simulate(args):
     if args.policy == "gavel":
         policy = GavelPolicy(args.interval, policy=sim_config.gavel_default_policy)
     elif args.policy == "sia_fix":
-        policy = policy = SiaFixPolicy(p_fairness=args.policy_p_val,
+        policy = SiaFixPolicy(p_fairness=args.policy_p_val,
                                                restart_penalty=30,
                                                lambda_a=args.mip_lambda_a,
                                                lambda_n=args.mip_lambda_n,
                                                project_throughputs=args.project_throughputs,
                                                share_max_replicas=args.share_max_replicas)
-    else:
+    elif args.policy == "sia":
         policy = SiaPolicy(p_fairness=args.policy_p_val,
                                    restart_penalty=30,
                                    lambda_a=args.mip_lambda_a,
@@ -44,6 +44,9 @@ def multi_simulate(args):
                                    project_throughputs=args.project_throughputs,
                                    share_max_replicas=args.share_max_replicas,
                                    enable_bsz_tuning=not args.disable_bsz_tuning)
+    elif args.policy == "dummy":
+        policy = DummyPolicy(args.b)
+        
     policy.populate_valid_configs(
         cluster_populate_nnodes, sim_ngpus_per_node, sim_config.cluster_max_physical_nnodes)
     cluster = Cluster(workload, policy, sim_config.cluster_nnodes, sim_ngpus_per_node,
@@ -53,8 +56,6 @@ def multi_simulate(args):
         cluster.disable_bsz_tuning()
     if args.policy == "gavel":
         cluster.disable_bsz_tuning()
-    elif args.policy == "dummy":
-        policy = DummyPolicy(args.b)
     if args.policy == "sia":
         # seed profiles for all rigid jobs
         rigid_jobs = [job for job in cluster.jobs if job.category == "rigid"]

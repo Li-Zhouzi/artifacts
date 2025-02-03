@@ -2,6 +2,7 @@ import math
 import time
 import numpy as np
 import random
+import os
 
 from applications import APPLICATIONS
 import simulator_config as sim_config
@@ -20,7 +21,7 @@ Options: None, "approximation", "raw_simulation"
 - raw_simulation enables profiling of the raw simulatƒion times
 
 """
-PROFILE="approximation"
+PROFILE="raw_simulation"
 
 class Job(object):
     def __init__(self, name, applications, submission_time,
@@ -247,7 +248,7 @@ class Job(object):
         else:
             return GoodputFunction(perf_params, grad_params, app.init_batch_size)
 
-    def get_speedup_fn(self, cluster_name=None):
+    def get_speedup_fn(self, cluster_name="aws"):
         if self.h_unaware:
             if self.grad_params is None:
                 return lambda n, r: r
@@ -461,6 +462,8 @@ class Job(object):
 
             scale = batch_size / application.init_batch_size
 
+            print("placement", placement)
+
             # Calculate true (simulated) efficiency.
             grad_sqr, grad_var = application.get_grad_stats(
                 batch_size, self.epoch)
@@ -492,7 +495,11 @@ class Job(object):
             # goodput multiplier
             # goodput = self.multiplier * goodput
             # slowdown for job
-            goodput = goodput * self.calibration_factor
+            # CHANGED: remove the calibration factor
+            # goodput = goodput * self.calibration_factor
+
+            # CHANGED: off by a constant factor
+            # goodput *= application.init_batch_size
 
 
             if PROFILE=="approximation":
