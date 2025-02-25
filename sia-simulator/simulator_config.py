@@ -62,7 +62,7 @@ sia_solver_num_threads = 8
 # solver optimality control
 sia_solver_thresh = 1e-4
 # other controls
-sia_log_goodputs = False
+sia_log_goodputs = True
 sia_log_problem = False
 # uses realloc factor defined in Pollux paper
 # Alternate formulation uses GPU-seconds instead of wall-clock seconds

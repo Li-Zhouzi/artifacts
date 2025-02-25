@@ -315,9 +315,11 @@ class Application(object):
         placement_id = int("".join(map(str, placement)))
         num_nodes, num_replicas = len(placement), sum(placement)
         if placement_id in self.placements.placement.values:
+            print("Branch 1")
             df = self.placements[self.placements.placement == placement_id]
             max_local_bsz = df.local_bsz.max()
         else:
+            print("Branch 2")
             sc_df = self.scalability[(self.scalability.num_nodes >= num_nodes) & (
                 self.scalability.num_replicas >= num_replicas)]
             max_local_bsz = sc_df.local_bsz.max()

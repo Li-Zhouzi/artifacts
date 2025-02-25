@@ -51,7 +51,7 @@ def multi_simulate(args):
         cluster_populate_nnodes, sim_ngpus_per_node, sim_config.cluster_max_physical_nnodes)
     cluster = Cluster(workload, policy, sim_config.cluster_nnodes, sim_ngpus_per_node,
                       max_physical_nodes=sim_config.cluster_max_physical_nnodes)
-    if args.disable_bsz_tuning and args.policy == "sia":
+    if args.disable_bsz_tuning and (args.policy == "sia" or args.policy == "dummy"):
         print(f"Diabled bsz tuning for {args.policy} policy")
         cluster.disable_bsz_tuning()
     if args.policy == "gavel":

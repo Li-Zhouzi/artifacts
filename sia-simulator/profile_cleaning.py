@@ -12,16 +12,13 @@ MAX_REPLICAS = 64
 def single_data(input_file, output_file):
     # Read the input CSV file
     data = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    base_goodput = defaultdict(lambda: defaultdict(float))
     with open(input_file, 'r') as f:
         reader = csv.reader(f)
         header = next(reader)  # Store header
         for row in reader:
-            name, epoch, replicas, speedup, goodput = row
+            name, epoch, replicas, goodput, throughput, efficiency = row
             # name = name.split("-")[0] # only take the job type
-            data[name][int(epoch)][int(replicas)].append(float(speedup))
-            base_goodput[name][int(epoch)] = float(goodput)
-
+            data[name][int(epoch)][int(replicas)].append((float(goodput), float(throughput), float(efficiency)))
     # Process the data and write to output file
     with open(output_file, 'w', newline='') as f:
         writer = csv.writer(f)
@@ -29,18 +26,21 @@ def single_data(input_file, output_file):
         
         for name in sorted(data.keys()):
             for epoch in sorted(data[name].keys()):
-                for replicas in range(1, 65):  # Assuming max 64 replicas
+                for replicas in range(1, MAX_REPLICAS+1):  # Assuming max 64 replicas
                     if replicas in data[name][epoch]:
                         values = data[name][epoch][replicas]
                         if len(values) == 1:
-                            speedup = values[0]
+                            goodput, throughput, efficiency = values[0]
                         elif len(values) == 2:
-                            speedup = max(values)
+                            goodput, throughput, efficiency = max(values, key=lambda x: x[0])[0]
                         else:
-                            speedup = statistics.median(values)
-                        writer.writerow([name, epoch, replicas, speedup, base_goodput[name][epoch]])
+                            goodputs = [x[0] for x in values]
+                            median_goodput = statistics.median(goodputs)
+                            idx = goodputs.index(median_goodput)
+                            goodput, throughput, efficiency = values[idx]
+                        writer.writerow([name, epoch, replicas, goodput, throughput, efficiency])
                     else:
-                        writer.writerow([name, epoch, replicas, 0.0, base_goodput[name][epoch]])
+                        writer.writerow([name, epoch, replicas, 0.0, 0.0, 0.0])
 
 def visualize_speedups(jobs, input_file):
     # Read the cleaned CSV file
@@ -92,7 +92,7 @@ def list2file(d, output_file):
     # Write the increasing data to the output CSV file
     with open(output_file, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["name", "epoch", "replicas", "speedup", "base_goodput"])
+        writer.writerow(["name", "epoch", "replicas", "goodput", "throughput", "efficiency"])
         writer.writerows(d)
         
 def file2dict(input_file):
@@ -122,16 +122,14 @@ def reshape(data):
 
 def clean_data(input_file, dir="profiling"):
     directory, filename = os.path.split(input_file)
-
-    mid_file = os.path.join(directory, "middle_speed.csv")
-    single_data(input_file, mid_file)
-    
     new_filename = f"cleaned_{filename}"
     output_file = os.path.join(directory, new_filename)
-    d = file2dict(mid_file)
-    reshaped = reshape(d)
-    list2file(reshaped, output_file)
-    os.remove(mid_file)
+    single_data(input_file, output_file)
+    
+    # d = file2dict(mid_file)
+    # reshaped = reshape(d)
+    # list2file(reshaped, output_file)
+    # os.remove(mid_file)
     os.remove(input_file)
 
 def load_goodput(goodput_path):
@@ -141,7 +139,7 @@ def load_goodput(goodput_path):
         for row in df:
             if row["name"] not in goodput_dict:
                 goodput_dict[row["name"]] = {}
-            goodput_dict[row["name"]][int(row["epoch"])] = float(row["goodput"])
+            goodput_dict[row["name"]][int(row["epoch"])] = (float(row["goodput"]), float(row["throughput"]), float(row["efficiency"]))
     return goodput_dict
 
 def load_speedup(speedup_dir):
@@ -149,8 +147,7 @@ def load_speedup(speedup_dir):
     for i in range(1, MAX_REPLICAS+1):
         path = os.path.join(speedup_dir, f"{i}gpu.csv")
         goodput_dicts[i] = load_goodput(path)
-    
-    base_goodput = goodput_dicts[1]
+
     speedup_dict = {}
     rows = []
     for num_gpus in range(1, MAX_REPLICAS+1):
@@ -161,9 +158,8 @@ def load_speedup(speedup_dir):
             for epoch in goodput_dict[name]:
                 if epoch not in speedup_dict[name]:
                     speedup_dict[name][epoch] = {}
-                goodput = goodput_dict[name][epoch]
-                base = base_goodput[name][epoch]
-                rows.append([name, epoch, num_gpus, goodput/base, base])
+                goodput, throughput, efficiency = goodput_dict[name][epoch]
+                rows.append([name, epoch, num_gpus, goodput, throughput, efficiency])
     rows.sort() 
     return rows
         

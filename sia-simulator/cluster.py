@@ -98,8 +98,12 @@ class Cluster(object):
                 if job.applications[cname].name == "ncf":
                     job.target_batch_size = 32768
         elif isinstance(policy, DummyPolicy):
-            self.jobs = [Job(row.name, self.cluster_applications[row.application], row.time,
-                             target_num_replicas=row.num_replicas)
+            cache_speedups = False
+            # For the experiment that fixes the batch size / num_gpus
+            batchsize = policy.num_gpus * 32
+            self.jobs = [Job(row.name, self.cluster_applications[row.application], row.time, cache_speedups=cache_speedups,  
+                            target_batch_size=batchsize,
+                            target_num_replicas=row.num_replicas)
                          for row in workload.itertuples()]
         else:
             assert False, f"unsupported policy {policy.__class__.__name__}"

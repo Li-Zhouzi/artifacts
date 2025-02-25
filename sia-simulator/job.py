@@ -21,7 +21,7 @@ Options: None, "approximation", "raw_simulation"
 - raw_simulation enables profiling of the raw simulatƒion times
 
 """
-PROFILE="raw_simulation"
+PROFILE="approximation"
 
 class Job(object):
     def __init__(self, name, applications, submission_time,
@@ -257,7 +257,8 @@ class Job(object):
             if self.grad_params is None or perf_params is None:
                 return None
         app = self.applications[cluster_name if cluster_name else "aws"]
-        max_batch_size = app.max_batch_size if self.target_batch_size is None else self.target_batch_size
+        # CHANGED:
+        max_batch_size = app.max_batch_size if self.enable_bsz_tuning else self.target_batch_size
         bsz_range = (app.min_local_bsz, app.max_local_bsz)
         return self.speedup_fn_class(self.get_goodput_fn(cluster_name), max_batch_size,
                                      bsz_range, accumulation=True, tune_bsz=self.enable_bsz_tuning)
@@ -496,7 +497,7 @@ class Job(object):
             # goodput = self.multiplier * goodput
             # slowdown for job
             # CHANGED: remove the calibration factor
-            # goodput = goodput * self.calibration_factor
+            goodput = goodput * self.calibration_factor
 
             # CHANGED: off by a constant factor
             # goodput *= application.init_batch_size
@@ -510,12 +511,27 @@ class Job(object):
                 replicas = 1
                 while replicas <=64:
                     nodes = int(math.ceil(replicas/4.0))
-                    print("speedup", self.name, self.epoch, replicas, speedup(nodes, replicas), speedup._base_goodput)
+                    if self.enable_bsz_tuning:
+                        goodput, atomic_bsz_t, accum_steps_t = speedup._goodput_fn.optimize(nodes, replicas, speedup._max_batch_size, 
+                                                                                        speedup._atomic_bsz_range, accumulation=speedup._accumulation, 
+                                                                                        tune_bsz=speedup.tune_bsz)
+                        bs_t = replicas * atomic_bsz_t * (accum_steps_t + 1)
+                        print("speedup", self.name, self.epoch, replicas, goodput, speedup._base_goodput, 
+                            speedup._goodput_fn.throughput(nodes, replicas, atomic_bsz_t, accum_steps_t) / speedup._goodput_fn._init_batch_size, 
+                            speedup._goodput_fn.efficiency(bs_t))
+                    else:
+                        atomic_bsz_t = 32
+                        accum_steps_t = self.accum_steps
+                        batchsize = replicas * atomic_bsz_t * (accum_steps_t + 1)
+                        Xput = speedup._goodput_fn.throughput(nodes, replicas, atomic_bsz_t, accum_steps_t) / speedup._goodput_fn._init_batch_size
+                        Efficiency = speedup._goodput_fn.efficiency(batchsize)
+                        print("speedup", self.name, self.epoch, replicas, Xput * Efficiency, speedup._base_goodput, 
+                              Xput , Efficiency)
                     replicas += 1
                 speedup._goodput_fn.VERBOSE=True
             
             elif PROFILE=="raw_simulation":
-                print("speedup", self.name, self.epoch, num_replicas, goodput)
+                print("speedup", self.name, self.epoch, num_replicas, goodput, scale/step_time, gain / scale) # scale / step_time is throughput
 
             # Update current epoch and progress.
             next_progress = application.get_progress(self.epoch + 1)
