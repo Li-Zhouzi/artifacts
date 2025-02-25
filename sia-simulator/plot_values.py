@@ -197,4 +197,4 @@ estimated_values_path = './profile_fix_localbsz/converted_values.csv'
 #     plot_goodput_curves('cifar', 50 , true_values_path, estimated_values_path, i)
 
 
-plot_goodput_curves('cifar10', 20 , true_values_path, estimated_values_path, 1)
+plot_goodput_curves('cifar10', 20 , true_values_path, estimated_values_path, 3)

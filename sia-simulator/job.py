@@ -21,7 +21,7 @@ Options: None, "approximation", "raw_simulation"
 - raw_simulation enables profiling of the raw simulatƒion times
 
 """
-PROFILE="approximation"
+PROFILE="raw_simulation"
 
 class Job(object):
     def __init__(self, name, applications, submission_time,

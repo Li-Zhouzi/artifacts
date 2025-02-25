@@ -71,14 +71,32 @@ def read_csv_speedups(filename):
     # Dictionary to store results
     results = {}
     
-    # Process each row
+    # First pass: get base goodput (goodput at replica=1) for each app/epoch combination
+    base_goodputs = {}  # {(app, epoch): base_goodput}
+    for _, row in df.iterrows():
+        app, job_id = row['name'].split('-')
+        epoch = int(row['epoch'])
+        replicas = int(row['replicas'])
+        goodput = float(row['goodput'])
+        
+        if replicas == 1:
+            base_goodputs[(app, epoch)] = goodput
+    
+    # Second pass: calculate speedups and store results
     for _, row in df.iterrows():
         app, job_id = row['name'].split('-')
         job_id = int(job_id)
         epoch = int(row['epoch'])
         replicas = int(row['replicas'])
-        speedup = float(row['speedup'])
-        base_goodput = float(row['base_goodput'])
+        goodput = float(row['goodput'])
+        
+        # Get base goodput for this app/epoch
+        base_goodput = base_goodputs.get((app, epoch))
+        if base_goodput is None:
+            continue  # Skip if we don't have base goodput
+            
+        # Calculate speedup
+        speedup = goodput / base_goodput
         
         # Initialize nested dictionaries if they don't exist
         if app not in results:
@@ -163,8 +181,78 @@ def plot_goodput_curves(app_name, epoch, results_test, results_csv, job_id=None)
     actual_job_id = job_id if job_id is not None else max(results_test[app_name].keys()) if app_name in results_test else 1
     
     # Modified filename to use actual_job_id and indicate goodput
-    plt.savefig(f'./results/figs/Goodput_{app_name}_job{actual_job_id}_epoch{epoch}.png', 
-                bbox_inches='tight', dpi=300)
+    # plt.savefig(f'./results/figs/Goodput_{app_name}_job{actual_job_id}_epoch{epoch}.png', 
+    #             bbox_inches='tight', dpi=300)
+    plt.show()
+    plt.close()
+
+def plot_speedup_curves(app_name, epoch, results_test, results_csv, job_id=None):
+    plt.figure(figsize=(8, 8))  # Make figure square
+    
+    # Plot test.txt results if available
+    replicas_test = []
+    speedup_values_test = []
+    if app_name in results_test:
+        # Use provided job_id or get the maximum one
+        job_id_test = job_id if job_id is not None else max(results_test[app_name].keys())
+        if epoch in results_test[app_name][job_id_test]:
+            data = results_test[app_name][job_id_test][epoch]
+            speedups = data['speedups']
+            replicas_test = sorted(speedups.keys())
+            speedup_values_test = [speedups[r] for r in replicas_test]
+            plt.plot(replicas_test, speedup_values_test, '-', linewidth=1,
+                    label='Estimation')
+    
+    # Plot CSV results if available (no job_id needed)
+    replicas_csv = []
+    speedup_values_csv = []
+    if app_name in results_csv:
+        if epoch in results_csv[app_name][0]:  # CSV data is always under job_id 0
+            data = results_csv[app_name][0][epoch]
+            speedups = data['speedups']
+            replicas_csv = sorted(speedups.keys())
+            speedup_values_csv = [speedups[r] for r in replicas_csv]
+            plt.plot(replicas_csv, speedup_values_csv, '-', linewidth=1,
+                    label='True speedup')
+    
+    # Find the maximum value for x-axis (replicas)
+    max_replicas = max(
+        max(replicas_test) if replicas_test else 0,
+        max(replicas_csv) if replicas_csv else 0
+    )
+    
+    # Find the maximum value for y-axis (speedup)
+    max_speedup = max(
+        max(speedup_values_test) if speedup_values_test else 0,
+        max(speedup_values_csv) if speedup_values_csv else 0
+    )
+    
+    # Set the axes limits
+    plt.xlim(0, max_replicas)
+    plt.ylim(0, max_speedup * 1.1)  # Add 10% margin on top
+    
+    # Plot the linear scaling line
+    plt.plot([0, max_replicas], [0, max_replicas], '--', 
+            label='Linear scaling (ideal)')
+    
+    plt.xlabel('Number of Replicas')
+    plt.ylabel('Speedup')
+    plt.title(f'Speedup Curves for {app_name} (Job {job_id}, Epoch {epoch})')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    
+    # Create directory if it doesn't exist
+    os.makedirs('./results/figs', exist_ok=True)
+    
+    # Get the actual job_id (use max if None) - only from test results
+    actual_job_id = job_id if job_id is not None else max(results_test[app_name].keys()) if app_name in results_test else 0
+    
+    # Modified filename to indicate speedup
+    # plt.savefig(f'./results/figs/Speedup_{app_name}_job{actual_job_id}_epoch{epoch}.png', 
+    #             bbox_inches='tight', dpi=300)
+    plt.show()
     plt.close()
 
 def convert_txt_to_csv_format(txt_filename, output_filename):
@@ -226,19 +314,19 @@ def convert_values_to_csv_format(txt_filename, output_filename):
 
 
 # Example usage
-# results_test = read_speedups('./results/sia_test.txt')
-# results_csv = read_csv_speedups('./profile_all2/cleaned_speedup_raw.csv')
+results_test = read_speedups('./results/test.txt')
+results_csv = read_csv_speedups('./profile_all2/cleaned_speedup_raw.csv')
 
-# # # Plot for each application at a specific epoch
+# # Plot for each application at a specific epoch
 # applications = ['cifar10', 'deepspeech2', 'bert']
-# # applications = ['cifar10']
-# epoch_to_plot = [75, 75, 0]  # Change this to the epoch you want to plot
-# # epoch_to_plot = [76]  # Change this to the epoch you want to plot
-# job_id_to_plot = [None, None, None]  # Change this to the job_id you want to plot
-# # job_id_to_plot = [10]  # Change this to the job_id you want to plot
-# for i, app in enumerate(applications):
-#     plot_goodput_curves(app, epoch_to_plot[i], results_test, results_csv, job_id_to_plot[i])
+applications = ['bert']
+epoch_to_plot = [0]  # Change this to the epoch you want to plot
+# epoch_to_plot = [76]  # Change this to the epoch you want to plot
+job_id_to_plot = [None, None, None]  # Change this to the job_id you want to plot
+# job_id_to_plot = [10]  # Change this to the job_id you want to plot
+for i, app in enumerate(applications):
+    plot_speedup_curves(app, epoch_to_plot[i], results_test, results_csv, job_id_to_plot[i])
 
 # Example usage:
 # convert_txt_to_csv_format('./results/sia_test.txt', './profile_all/converted_test.csv')
-convert_values_to_csv_format('./results/test_fix_localbsz.txt', './profile_fix_localbsz/converted_values.csv')
+# convert_values_to_csv_format('./results/test.txt', './profile_all/converted_values.csv')
