@@ -1,16 +1,16 @@
+import logging
 import math
 import time
 import numpy as np
 import random
-import os
 
 from applications import APPLICATIONS
 import simulator_config as sim_config
 from simulator_config import SLOWDOWNS
 from goodput import GoodputFunction, GoodputFunctionPMP, fit_perf_params, PerfParams, GradParams
 from speedup import SpeedupFunction, UncachedSpeedupFunction
-from utils import JobInfo, NodeInfo
-
+from utils import JobInfo, LogWrapper, NodeInfo
+from fixedwidth import FixedWidthPolicy
 MAX_SLOWDOWN = 15
 
 """
@@ -21,12 +21,12 @@ Options: None, "approximation", "raw_simulation"
 - raw_simulation enables profiling of the raw simulatƒion times
 
 """
-PROFILE="raw_simulation"
+PROFILE="approximation"
 
 class Job(object):
     def __init__(self, name, applications, submission_time,
                  target_num_replicas=None, target_batch_size=None,
-                 cache_speedups=False, h_unaware=False, category=None):
+                 cache_speedups=False, h_unaware=False, category=None, fixed_params=True):
         ## Job attributes
         self.name = name
         self.app_name = list(applications.values())[0].name
@@ -87,6 +87,7 @@ class Job(object):
         self.used_gpu_seconds = 0
         # GPU-seconds wasted by job
         self.wasted_gpu_seconds = 0
+        self.total_gpu_time = 0
 
         # number of jobs contending for resources (one value per round)
         self.contention = []
@@ -109,9 +110,17 @@ class Job(object):
         # shockwave addons
         self.execution_time = 0
         self.epoch_duration = []
-        self.completion_epoch = self.reference_app.get_completion_epoch(
-            self.target_batch_size) if self.target_batch_size is not None else None
-
+        self.completion_epoch = (
+            self.reference_app.get_completion_epoch(self.target_batch_size)
+            if self.target_batch_size is not None
+            else None
+        )
+        self.logger = LogWrapper(logging.getLogger(__name__))
+        self.epoch_time = 0
+        self.goodputs = dict()
+        self.epoch_num_gpus = dict()
+        self.rescale_times = dict() # rescale time by epoch
+        
         # calibration factor for this job (calibration step to account for real-world runs being slower than simulator)
         self.calibration_factor = 1 / SLOWDOWNS[self.app_name]
         if sim_config.log_cluster_verbose: 
@@ -120,7 +129,7 @@ class Job(object):
     # optimizes perf params given an input perf profile
     # perf_profile is a dict w/ key=(num_nodes, num_replicas, local_bsz), val=(step_time, sync_time)
     # returns a PerfParams object
-    def optimize_perf_params(self, perf_profile):
+    def optimize_perf_params(perf_profile):
         if perf_profile is None:
             return None
         num_nodes = np.array([key[0] for key in perf_profile])
@@ -134,11 +143,13 @@ class Job(object):
                 num_nodes, num_replicas, local_bsz, compute_time, step_time)
         return perf_params
 
-    def seed_profiles(self, max_num_nodes, max_num_replicas):
-        print(f"Seeding profiles for job: {self.name}")
-        for cluster, cluster_app in self.applications.items():
-            self.profiles[cluster] = dict()
-            profile = self.profiles[cluster]
+    def seed_profiles(name, max_num_nodes, max_num_replicas, applications):
+        print(f"Seeding profiles for job: {name}")
+        profiles = {}
+        perf_params = {}
+        for cluster, cluster_app in applications.items():
+            profiles[cluster] = dict()
+            profile = profiles[cluster]
 
             # add placements data
             if max_num_nodes > 0:
@@ -151,7 +162,7 @@ class Job(object):
             num_nodes, num_replicas, local_bsz, step_time, sync_time = df.num_nodes.to_numpy(
             ), df.num_replicas.to_numpy(), df.local_bsz.to_numpy(), df.step_time.to_numpy(), df.sync_time.to_numpy()
             for i in range(len(num_nodes)):
-                self.profiles[cluster][num_nodes[i], num_replicas[i],
+                profiles[cluster][num_nodes[i], num_replicas[i],
                                        local_bsz[i]] = step_time[i], sync_time[i]
             # add scalability data
             if max_num_nodes > 0:
@@ -169,11 +180,14 @@ class Job(object):
                     profile[profile_key] = step_time[i], sync_time[i]
 
             # update perf params for cluster
-            self.perf_params[cluster] = self.optimize_perf_params(profile)
+            perf_params[cluster] = Job.optimize_perf_params(profile)
+            return perf_params, profiles
+            
 
     def seed_profiles_rigid(self, cluster_ngpus_per_node):
         print(
             f"Seeding profiles for job: {self.name}, target bsz: {self.target_batch_size}, target num replicas: {self.target_num_replicas}")
+        perf_params = {} 
         for cluster in cluster_ngpus_per_node.keys():
             cluster_app = self.applications[cluster]
             self.profiles[cluster] = dict()
@@ -219,9 +233,12 @@ class Job(object):
                 continue
 
             # compute perf params for cluster
-            self.perf_params[cluster] = self.optimize_perf_params(profile)
+            perf_params[cluster] = Job.optimize_perf_params(profile)
+        
             print(
                 f"Initialized goodput fn for job: {self.name}, cluster: {cluster}")
+        
+        return perf_params
 
     # returns the maximum number of replicas profiled for a given cluster
     def max_profiled_replicas(self, cluster_name=None):
@@ -236,7 +253,7 @@ class Job(object):
     def get_goodput_fn(self, cluster_name=None):
         app = self.applications[cluster_name if cluster_name else "aws"]
         if self.h_unaware:
-            perf_params, grad_params = self.perf_params, self.grad_params
+            perf_params, grad_params = self.perf_params["aws"], self.grad_params
         else:
             perf_params, grad_params = self.perf_params[cluster_name], self.grad_params
 
@@ -257,7 +274,6 @@ class Job(object):
             if self.grad_params is None or perf_params is None:
                 return None
         app = self.applications[cluster_name if cluster_name else "aws"]
-        # CHANGED:
         max_batch_size = app.max_batch_size if self.enable_bsz_tuning else self.target_batch_size
         bsz_range = (app.min_local_bsz, app.max_local_bsz)
         return self.speedup_fn_class(self.get_goodput_fn(cluster_name), max_batch_size,
@@ -415,9 +431,8 @@ class Job(object):
         else:
             self.profiles[self.current_cluster][num_nodes,
                                                 num_replicas, local_bsz] = step_time, sync_time
-
         # get PerfParams for these profiles
-        perf_params = self.optimize_perf_params(profile)
+        perf_params = Job.optimize_perf_params(profile) # TODO
         if self.h_unaware:
             self.perf_params = perf_params
         else:
@@ -436,6 +451,9 @@ class Job(object):
         self.current_time += delay
         self.attained_service += delay * sum(self.placement)
         self.wasted_gpu_seconds += delay * sum(self.placement)
+        if self.epoch not in self.rescale_times:
+            self.rescale_times[self.epoch] = 0
+        self.rescale_times[self.epoch] += delay
         
         # update rescale time
         self.rescale_time -= delay
@@ -452,6 +470,7 @@ class Job(object):
             # Calculate current job configurations.
             placement = tuple(filter(None, self.placement))
             num_nodes, num_gpus = len(placement), sum(placement)
+            self.epoch_num_gpus[self.epoch] = num_gpus
             local_bsz = self.atomic_bsz * (self.accum_steps + 1)
             # one PMP replica can span many stages
             if self.num_stages > 1:
@@ -466,19 +485,16 @@ class Job(object):
                 batch_size, self.epoch)
             gain = (grad_var + grad_sqr) / (grad_var / scale + grad_sqr)
 
-            # Calculate true (simulated) throughput.
-            # query xput with atomic_bsz (bsz per pipeline replica)
             query_bsz = self.atomic_bsz
             # check if job is PMP
             if self.num_stages > 1:
                 # query xput with local_bsz (bsz per pipeline replica)
                 query_bsz = local_bsz
             # get throughput for current placement with query_bsz per replica
-            step_time, sync_time = application.get_throughput(
-                placement, query_bsz)
+            step_time, sync_time = application.get_throughput(placement, query_bsz)
             # compute time per accumulation step
             accum_time = step_time - sync_time
-            # Update the estimated throughput/efficiency parameters.
+            # Update the estimated throughput/efficiency parameters. #HACK
             self.update_params(num_nodes, num_replicas, query_bsz,
                                step_time, sync_time, grad_sqr, grad_var)
             # Calculate true (simulated) goodput.
@@ -489,16 +505,16 @@ class Job(object):
             total_time = step_time + accum_time * accum_steps
             goodput = gain / total_time * (1.0 - interference)
 
-            # goodput multiplier
-            # goodput = self.multiplier * goodput
-            # slowdown for job
-            # CHANGED: remove the calibration factor
-            goodput = goodput * self.calibration_factor
+            assert interference == 0
 
-            # CHANGED: off by a constant factor
-            # goodput *= application.init_batch_size
+            # throughput = batch_size / total_time
+            # goodput = efficiency * throughput
 
+            # goodput /= application.init_batch_size
+            goodput *= self.calibration_factor
+        
 
+            
             if PROFILE=="approximation":
                 speedup = self.get_speedup_fn("aws")
                 speedup._goodput_fn.VERBOSE=True
@@ -527,8 +543,7 @@ class Job(object):
                 speedup._goodput_fn.VERBOSE=True
             
             elif PROFILE=="raw_simulation":
-                print("speedup", self.name, self.epoch, num_replicas, goodput, scale/step_time, gain / scale) # scale / step_time is throughput
-
+                print("speedup", self.name, self.epoch, num_replicas, goodput)
             # Update current epoch and progress.
             next_progress = application.get_progress(self.epoch + 1)
             if self.progress + goodput * seconds < next_progress:
@@ -537,37 +552,50 @@ class Job(object):
                 self.current_time += seconds
                 self.attained_service += seconds * sum(self.placement)
                 self.execution_time += seconds
+                self.epoch_time += seconds
                 seconds = 0
             else:
                 # Crossed an epoch boundary before finishing the time interval.
                 # update epoch duration
                 assert len(self.epoch_duration) == self.epoch
-                duration = round(float((application.get_progress(
-                    self.epoch + 1) - application.get_progress(self.epoch)) / goodput))
+                
+                duration = (
+                    float(next_progress - application.get_progress(self.epoch))
+                    / goodput
+                )
                 self.epoch_duration.append(duration)
+
                 if self.epoch == application.max_epochs:
                     print(
                         f"Epoch durations: {self.name} -> {self.epoch_durations}")
                 self.epoch += 1
-                delta = round(float((next_progress - self.progress) / goodput))
+                delta = float((next_progress - self.progress) / goodput)
                 assert delta <= seconds
                 completion_epoch = application.get_completion_epoch(batch_size)
                 self.completion_epoch = completion_epoch
                 if self.epoch > completion_epoch:
                     self.completion_time = self.current_time + delta
+
+                self.epoch_time += float((next_progress - self.progress) / goodput)
+                # self.epoch_duration.append(self.epoch_time)
+                self.epoch_time = 0
+
                 self.progress = next_progress
-                self.best_metric = application.get_best_metric(
-                    batch_size, self.epoch)
+                self.best_metric = application.get_best_metric(batch_size, self.epoch)
                 self.current_time += delta
                 self.attained_service += delta * sum(self.placement)
                 self.execution_time += delta
                 seconds -= delta
+
                 # Re-scale batch size between epochs.
-            self.update_local_bsz(self.placement)
+                self.update_local_bsz(self.placement)
         self.current_time += seconds  # Add any remaining time.
 
     def reallocate(self, placement):
         old_placement, new_placement = self.placement, tuple(placement)
+        self.logger.debug(
+            f"REALLOCATE {self.name} with placement {placement}, old_placement={old_placement} epoch={self.epoch}"
+        )
         if placement:
             if old_placement != new_placement:
                 # print(f"RESCALE: job: {self.name}, cluster: {self.current_cluster}, placement: {old_placement} -> {new_placement}")
@@ -597,6 +625,7 @@ class Job(object):
         return new_rescale_event
 
     def migrate(self, new_cluster, new_placement):
+        self.logger.debug(f"MIGRATE {self.name} placement={new_placement} epoch={self.epoch}")
         # set current cluster
         prev_cluster = self.current_cluster
         # print(f"MIGRATE:: {self.name}, cluster: {prev_cluster} -> {new_cluster}")
@@ -607,6 +636,7 @@ class Job(object):
             self.update_local_bsz(self.placement)
             # Start startup/re-scale countdown.
             self.rescale_time = self.applications[self.current_cluster].rescale_time or 30
+            # self.rescale_time = 0 # TODO: turn rescle time back on
             # print(f"RESCALE_TIME: {self.name} --> {new_cluster}, {self.rescale_time}")
             if self.num_restarts is None:
                 self.num_restarts = 0
@@ -615,7 +645,7 @@ class Job(object):
             # get num stages for this GPU type
             self.num_stages = self.applications[self.current_cluster].num_stages
         else:
-            print(f"SUSPEND: job: {self.name}")
+            # print(f"SUSPEND: job: {self.name}")
             # De-allocate all resources.
             self.placement = ()
             self.atomic_bsz = 0
