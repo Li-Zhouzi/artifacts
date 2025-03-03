@@ -1,0 +1,4 @@
+numpy~=1.23.0
+pandas
+pymoo~=0.4.2.1
+scipy
